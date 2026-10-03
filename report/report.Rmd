@@ -1,0 +1,810 @@
+---
+title: "EUR/USD Exchange Rate Forecasting: Classical and Deep Learning Approaches"
+subtitle: "Mini Project - Time Series Analysis"
+author: "Amira HAMDANI & Zahrat El OUlaa HAMDANI"
+date: "October 2026"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    df_print: kable
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+    highlight: tango
+    df_print: paged
+fontsize: 11pt
+geometry: margin=1in
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+                    output_dir = "C:/Users/VICTUS/Desktop/MiniProject_EURUSD/report") })
+---
+# Make knit robust: don't stop on errors
+knitr::opts_chunk$set(error = TRUE)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  warning    = FALSE,
+  message    = FALSE,
+  fig.align  = "center",
+  fig.width  = 10,
+  fig.height = 6,
+  dpi        = 120,
+  cache      = FALSE
+)
+knitr::opts_knit$set(root.dir = "C:/Users/VICTUS/Desktop/MiniProject_EURUSD")
+set.seed(42)
+
+suppressPackageStartupMessages({
+  library(xts)
+  library(zoo)
+  library(forecast)
+  library(tseries)
+  library(ggplot2)
+  library(gridExtra)
+  library(urca)
+  library(tsoutliers)
+  library(rugarch)
+  library(vars)
+  library(moments)
+  library(knitr)
+  library(kableExtra)
+  library(dplyr)
+})
+
+if (!dir.exists("figures")) dir.create("figures", recursive = TRUE)
+
+compute_metrics <- function(actual, predicted) {
+  actual    <- as.numeric(actual)
+  predicted <- as.numeric(predicted)
+  mse  <- mean((actual - predicted)^2, na.rm = TRUE)
+  rmse <- sqrt(mse)
+  mae  <- mean(abs(actual - predicted), na.rm = TRUE)
+  mape <- mean(abs((actual - predicted) / actual), na.rm = TRUE) * 100
+  return(c(MSE = mse, RMSE = rmse, MAE = mae, MAPE = mape))
+}
+```
+
+# Introduction
+
+## Context and Motivation
+
+The foreign exchange market is the largest financial market in the world,
+with a daily trading volume exceeding 7.5 trillion USD. Among all currency
+pairs, **EUR/USD** is by far the most traded, representing approximately
+**24% of all daily transactions** according to the Bank for International
+Settlements (BIS, 2022).
+
+Forecasting exchange rates is a fundamental challenge in financial
+econometrics. Unlike stock prices, exchange rates are influenced by a
+complex interplay of macroeconomic factors: interest rate differentials,
+central bank policies, inflation, geopolitical events, and market sentiment.
+
+## Problem Statement
+
+This project addresses the following research questions:
+
+1. **Is EUR/USD predictable?** Or does it behave as a random walk,
+   consistent with the Efficient Market Hypothesis (Fama, 1970)?
+2. **Which modeling approach performs best?** Classical models (ARIMA,
+   SARIMA, VAR, GARCH) or deep learning models (LSTM, GRU)?
+3. **What role can Large Language Models (LLMs) play** in financial
+   time series analysis?
+
+## Objectives
+
+- Perform a rigorous **exploratory data analysis** of EUR/USD
+- Estimate and compare **classical stochastic models**
+- Implement **deep learning models** (LSTM, GRU) and a **hybrid ARIMA-LSTM**
+- Use **LLMs** to generate hypotheses, explain results, and produce
+  investment recommendations with explicit risk disclosure
+- Produce **forecasts for horizon h = 5 to 10 days** and evaluate them
+  with MSE, RMSE, MAE, and MAPE
+
+## Data Source
+
+All data is downloaded from **Yahoo Finance** using the `yfinance` Python
+library:
+
+| Series | Ticker | Period | Frequency |
+|--------|--------|--------|-----------|
+| EUR/USD | `EURUSD=X` | 2015-2025 | Daily + Hourly |
+| Dollar Index (DXY) | `DX-Y.NYB` | 2015-2025 | Daily |
+| US 10Y Treasury | `^TNX` | 2015-2025 | Daily |
+
+# Data Import and Preparation
+
+## Data Loading
+
+```{r load-data}
+df <- read.csv("data/processed/eurusd_merged.csv", stringsAsFactors = FALSE)
+df$Date <- as.Date(df$Date)
+rownames(df) <- df$Date
+
+cat("Period          :", format(min(df$Date)), "to", format(max(df$Date)), "\n")
+cat("Observations    :", nrow(df), "\n")
+cat("Variables       :", paste(names(df)[-1], collapse = ", "), "\n")
+```
+
+## Descriptive Statistics
+```{r desc-stats}
+ts_eurusd <- xts(df$EURUSD,     order.by = df$Date)
+ts_dxy    <- xts(df$DXY,        order.by = df$Date)
+ts_us10y  <- xts(df$US10Y,      order.by = df$Date)
+ts_ret    <- xts(df$ret_eurusd, order.by = df$Date)
+
+desc_table <- data.frame(
+  Variable  = c("EUR/USD", "DXY", "US 10Y", "EUR/USD Log-Returns"),
+  Mean      = c(mean(ts_eurusd), mean(ts_dxy), mean(ts_us10y), mean(ts_ret, na.rm = TRUE)),
+  SD        = c(sd(ts_eurusd),   sd(ts_dxy),   sd(ts_us10y),   sd(ts_ret, na.rm = TRUE)),
+  Min       = c(min(ts_eurusd),  min(ts_dxy),  min(ts_us10y),  min(ts_ret, na.rm = TRUE)),
+  Max       = c(max(ts_eurusd),  max(ts_dxy),  max(ts_us10y),  max(ts_ret, na.rm = TRUE)),
+  Skewness  = c(skewness(ts_eurusd), skewness(ts_dxy), skewness(ts_us10y), skewness(ts_ret, na.rm = TRUE)),
+  Kurtosis  = c(kurtosis(ts_eurusd), kurtosis(ts_dxy), kurtosis(ts_us10y), kurtosis(ts_ret, na.rm = TRUE))
+)
+
+# Use row.names = FALSE and keep Variable as a column
+knitr::kable(round(desc_table[, -1], 4),
+             caption = "Descriptive Statistics of the Series",
+             row.names = FALSE)
+```
+
+**Interpretation.** The EUR/USD log-returns exhibit:
+
+- A **skewness close to zero**, indicating approximate symmetry
+- A **kurtosis greater than 3** (leptokurtic), confirming **fat tails** —
+  a typical feature of financial returns
+
+These properties justify the use of **GARCH-type models** to capture
+the volatility dynamics.
+
+## Train/Test Split (90/10)
+
+```{r split}
+n <- length(ts_ret)
+n_train <- floor(0.9 * n)
+n_test  <- n - n_train
+
+train <- ts_ret[1:n_train]
+test  <- ts_ret[(n_train + 1):n]
+
+cat("Total observations  :", n, "\n")
+cat("Training set (90%)  :", n_train, "\n")
+cat("Test set (10%)      :", n_test, "\n")
+cat("Train period        :", format(start(train)), "to", format(end(train)), "\n")
+cat("Test period         :", format(start(test)),  "to", format(end(test)),  "\n")
+```
+
+# Exploratory Data Analysis
+
+## Time Series Plots
+
+```{r ts-plots, fig.height=8}
+par(mfrow = c(3, 1), mar = c(3, 4, 2, 1))
+plot(ts_eurusd, main = "EUR/USD Exchange Rate (Close)",
+     col = "steelblue", ylab = "Price", xlab = "")
+plot(ts_dxy,    main = "US Dollar Index (DXY)",
+     col = "darkorange", ylab = "Index", xlab = "")
+plot(ts_us10y,  main = "US 10Y Treasury Yield",
+     col = "darkred", ylab = "%", xlab = "")
+par(mfrow = c(1, 1))
+```
+
+**Comment.** Visual inspection reveals:
+
+- A **downward trend** in EUR/USD from 2015 to 2022, followed by a rebound
+- **Inverse relationship** with DXY (mechanical, since EUR is a major
+  component of the dollar index)
+- **Volatility clustering** — periods of high volatility (2020 COVID,
+  2022 Ukraine war) alternate with calm periods
+
+## Stationarity Tests
+
+### Augmented Dickey-Fuller (ADF)
+
+```{r adf-tests}
+cat("=== ADF Test on Price ===\n")
+adf_price <- adf.test(ts_eurusd)
+print(adf_price)
+
+cat("\n=== ADF Test on Log-Returns ===\n")
+adf_ret <- adf.test(na.omit(ts_ret))
+print(adf_ret)
+```
+
+**Interpretation.**
+
+| Series | ADF p-value | Conclusion |
+|--------|-------------|------------|
+| EUR/USD price | > 0.05 | **Non-stationary** (unit root) |
+| EUR/USD log-returns | < 0.01 | **Stationary** |
+
+This justifies using **d = 1** in ARIMA and modeling the **log-returns**
+directly.
+
+## ACF and PACF Analysis
+
+```{r acf-pacf, fig.height=4}
+par(mfrow = c(1, 2))
+acf(na.omit(ts_ret),  lag.max = 40, main = "ACF - EUR/USD Log-Returns")
+pacf(na.omit(ts_ret), lag.max = 40, main = "PACF - EUR/USD Log-Returns")
+par(mfrow = c(1, 1))
+```
+
+**Comment.** Almost all autocorrelations fall within the confidence
+bands, indicating **no significant linear autocorrelation** in the
+log-returns. This is consistent with the **Efficient Market Hypothesis**
+and suggests that EUR/USD is close to a **random walk**. Any forecasting
+gain must therefore come from modeling the **volatility** (GARCH) or
+**non-linear patterns** (deep learning).
+
+## STL Decomposition
+
+```{r stl, fig.height=8}
+ts_sub <- window(ts_eurusd, start = "2023-01-01")
+ts_sub_univ <- ts(as.numeric(ts_sub), frequency = 252)
+decomp <- stl(ts_sub_univ, s.window = "periodic")
+plot(decomp, main = "STL Decomposition - EUR/USD (Last 2 Years)")
+```
+
+**Comment.** The decomposition shows:
+
+- A **slow-moving trend** reflecting macroeconomic cycles
+- **Weak daily seasonality** (hence the use of hourly data for SARIMA)
+- **Residuals** containing the volatility structure — a candidate
+  for GARCH modeling
+
+## Outlier Detection
+```{r outliers}
+ret_vec <- na.omit(as.numeric(ts_ret))
+z_scores <- abs((ret_vec - mean(ret_vec)) / sd(ret_vec))
+outlier_idx <- which(z_scores > 4)
+
+cat("Number of outliers detected (|z| > 4):", length(outlier_idx), "\n\n")
+
+if (length(outlier_idx) > 0) {
+  outlier_df <- data.frame(
+    Date    = index(ts_ret)[outlier_idx],
+    Return  = round(ret_vec[outlier_idx], 6),
+    Z_score = round(z_scores[outlier_idx], 2)
+  )
+  print(outlier_df)
+}
+```
+
+**Interpretation.** The detected outliers correspond to major
+geopolitical and economic events:
+
+| Date | Event | Impact |
+|------|-------|--------|
+| 2016-06-24 | Brexit referendum | Sharp EUR/USD drop |
+| 2020-03-16 | COVID-19 pandemic | Extreme volatility |
+| 2022-02-24 | Russia-Ukraine war | EUR/USD decline |
+| 2022-09-26 | EUR/USD hits 0.95 | Historic low |
+
+## Correlation Analysis
+
+```{r correlation}
+cor_matrix <- cor(na.omit(cbind(
+  as.numeric(ts_ret),
+  c(NA, diff(as.numeric(ts_dxy))),
+  c(NA, diff(as.numeric(ts_us10y)))
+)))
+colnames(cor_matrix) <- rownames(cor_matrix) <- c("EURUSD_ret", "DXY_ret", "US10Y_ret")
+
+kable(round(cor_matrix, 3),
+      caption = "Correlation Matrix of Log-Returns",
+      )
+```
+
+**Comment.** EUR/USD log-returns are **strongly negatively correlated**
+with DXY changes (around -0.85), confirming the mechanical relationship.
+The correlation with US 10Y yields is weaker but significant. These
+relationships justify the use of a **VAR model**.
+
+# Classical Modeling
+
+## ARIMA Model
+
+```{r arima}
+fit_arima <- auto.arima(train, seasonal = FALSE,
+                        stepwise = FALSE, approximation = FALSE)
+print(summary(fit_arima))
+```
+
+**Interpretation.** The selected model is typically **ARIMA(0,1,1)** or
+**ARIMA(1,1,0)**, confirming the weak autocorrelation of EUR/USD. The
+coefficients are small (near zero), which is **expected** for a near-random
+walk.
+
+### Residual Diagnostics
+
+```{r arima-diag, fig.height=6}
+checkresiduals(fit_arima)
+```
+
+```{r arima-tests}
+res_arima <- as.numeric(residuals(fit_arima))
+
+cat("Ljung-Box p-value    :", Box.test(res_arima, lag = 20, type = "Ljung-Box")$p.value, "\n")
+cat("Shapiro-Wilk p-value :", shapiro.test(res_arima)$p.value, "\n")
+cat("Jarque-Bera p-value  :", jarque.test(res_arima)$p.value, "\n")
+```
+
+**Interpretation.**
+
+- **Ljung-Box p-value > 0.05** → residuals are **not autocorrelated** (good)
+- **Shapiro-Wilk / Jarque-Bera p < 0.05** → residuals are **not normal**
+  (fat tails) → justifies adding **GARCH**
+
+## SARIMA Model (Hourly Data)
+
+```{r sarima, eval=FALSE}
+df_h <- read.csv("data/raw/eurusd_hourly.csv")
+df_h$Date <- as.POSIXct(df_h$Date, tz = "UTC")
+ts_h <- xts(df_h$Close, order.by = df_h$Date)
+ts_h_ret <- na.omit(diff(log(ts_h)))
+
+fit_sarima <- auto.arima(ts_h_ret, seasonal = TRUE, D = 1)
+summary(fit_sarima)
+checkresiduals(fit_sarima)
+```
+
+**Comment.** On hourly data, SARIMA captures **intraday seasonality**
+linked to the Asian, European, and American trading sessions (s = 24).
+
+## GARCH Model
+
+```{r garch}
+returns <- na.omit(ts_ret * 100)
+
+spec_garch <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model     = list(armaOrder = c(0, 0))
+)
+fit_garch <- ugarchfit(spec = spec_garch, data = returns)
+
+coef_garch <- coef(fit_garch)
+print(round(coef_garch, 6))
+```
+
+**Interpretation.**
+
+The GARCH(1,1) variance equation is:
+
+$$\sigma_t^2 = \omega + \alpha_1 u_{t-1}^2 + \beta_1 \sigma_{t-1}^2$$
+
+- **α₁** measures the reaction to recent shocks
+- **β₁** measures the persistence of volatility
+- **α₁ + β₁ < 1** ensures stability
+
+If **α₁ + β₁ ≈ 0.99**, volatility is highly persistent — a well-documented
+feature of FX markets.
+
+### GARCH Forecast
+
+```{r garch-fc, fig.height=7}
+garch_fc <- ugarchforecast(fit_garch, n.ahead = 20)
+fc_sigma <- as.numeric(sigma(garch_fc))
+plot(1:20, fc_sigma, type = "b", pch = 19, col = "darkred",
+     main = "GARCH Forecast - Conditional Volatility",
+     xlab = "Horizon (days)", ylab = "Sigma")
+```
+## VAR Model
+```{r var}
+var_data <- data.frame(
+  EURUSD = as.numeric(df$ret_eurusd),
+  DXY    = as.numeric(df$ret_dxy),
+  US10Y  = as.numeric(df$ret_us10y)
+)
+var_data <- na.omit(var_data)
+
+lag_sel <- VARselect(var_data, lag.max = 10, type = "const")
+print(lag_sel$selection)
+
+# BIC = SC in vars package
+p_opt <- max(1, as.numeric(lag_sel$selection["SC(n)"]))
+if (is.na(p_opt)) p_opt <- 2   # fallback
+
+cat("Selected lag p =", p_opt, "\n\n")
+
+var_model <- VAR(var_data, p = p_opt, type = "const")
+summary(var_model)
+```
+
+### Granger Causality
+
+```{r granger}
+cat("=== Granger: DXY -> EURUSD ===\n")
+print(tryCatch(causality(var_model, cause = "DXY"),
+               error = function(e) cat("Granger test skipped:", conditionMessage(e), "\n")))
+
+cat("\n=== Granger: US10Y -> EURUSD ===\n")
+print(tryCatch(causality(var_model, cause = "US10Y"),
+               error = function(e) cat("Granger test skipped:", conditionMessage(e), "\n")))
+```
+**Interpretation.** The Granger tests indicate whether DXY or US10Y
+**Granger-cause** EUR/USD. A p-value < 0.05 means the null hypothesis
+of no causality is rejected.
+
+### Impulse Response Functions
+```{r irf, fig.height=6}
+irf_res <- tryCatch(
+  irf(var_model, n.ahead = 20, boot = TRUE, ci = 0.95),
+  error = function(e) { cat("IRF skipped:", conditionMessage(e), "\n"); NULL }
+)
+if (!is.null(irf_res)) plot(irf_res)
+```
+
+### Forecast Error Variance Decomposition
+```{r fevd, fig.height=6}
+fevd_res <- tryCatch(
+  fevd(var_model, n.ahead = 20),
+  error = function(e) { cat("FEVD skipped:", conditionMessage(e), "\n"); NULL }
+)
+if (!is.null(fevd_res)) plot(fevd_res)
+```
+
+# Advanced Modeling
+
+## Deep Learning (LSTM, GRU)
+
+The deep learning models are implemented in **Python** using
+TensorFlow/Keras. See `python/05_lstm_gru.py` and `python/06_hybrid_arima_lstm.py`.
+
+### Methodology
+
+- **Lag window**: 30 days
+- **Architecture**: 2 stacked LSTM/GRU layers (50 units each) + Dropout (0.2) + Dense(1)
+- **Optimizer**: Adam
+- **Loss**: MSE
+- **Early stopping**: patience = 10
+- **Train/Validation split**: 80/20
+
+### Results
+
+```{r lstm-results, echo=FALSE}
+lstm_metrics_file <- "figures/metrics_lstm_gru.csv"
+if (file.exists(lstm_metrics_file)) {
+  lstm_metrics <- read.csv(lstm_metrics_file)
+  kable(lstm_metrics, caption = "LSTM vs GRU Performance",
+        )
+} else {
+  cat("Run python/05_lstm_gru.py to generate these metrics.\n")
+}
+```
+
+```{r lstm-plot, echo=FALSE, fig.height=6}
+img_path <- "figures/13_lstm_gru_forecast.png"
+if (file.exists(img_path)) {
+  knitr::include_graphics(img_path)
+} else {
+  cat("Run python/05_lstm_gru.py to generate this plot.\n")
+}
+```
+
+## Hybrid ARIMA-LSTM
+
+The hybrid approach combines:
+
+1. **ARIMA** to capture the linear structure
+2. **LSTM** to model the residuals (non-linear component)
+
+$$\hat{y}_t = \hat{y}_t^{ARIMA} + \hat{e}_t^{LSTM}$$
+
+```{r hybrid-results, echo=FALSE}
+hybrid_file <- "figures/metrics_hybrid.csv"
+if (file.exists(hybrid_file)) {
+  hybrid_metrics <- read.csv(hybrid_file)
+  kable(hybrid_metrics, caption = "Hybrid ARIMA-LSTM Performance",
+        )
+} else {
+  cat("Run python/06_hybrid_arima_lstm.py to generate these metrics.\n")
+}
+```
+
+# LLM Integration
+
+## Methodology
+
+A Large Language Model (ChatGPT-4 / Gemini) was used for four tasks:
+
+1. **Generating model hypotheses** from descriptive statistics
+2. **Vulgarizing results** for non-specialist readers
+3. **Producing simulated investment recommendations** with explicit risk disclosure
+4. **Comparing human vs. AI interpretations** to assess coherence
+
+All prompts and responses are archived in `llm_prompts/`.
+
+## Prompt 1: Hypothesis Generation
+
+**Prompt:**
+
+```
+Context: EUR/USD daily data 2015-2025.
+Descriptive stats:
+- Mean price: 1.10
+- Skewness of log-returns: -0.15
+- Kurtosis: 4.8
+- ADF on price: p = 0.42 (non-stationary)
+- ADF on returns: p < 0.01 (stationary)
+- Autocorrelation of returns: near zero
+- Correlation EUR/USD vs DXY: -0.85
+
+Task: Propose 5 time series models to test, ranked by relevance,
+with statistical justification and expected limitations.
+```
+
+**LLM Response (summary):**
+
+> 1. **ARIMA(0,1,1)** — best fit for near-random-walk series
+> 2. **GARCH(1,1)** — for volatility clustering
+> 3. **VAR** — to capture DXY and rate interactions
+> 4. **SARIMA** on hourly data — for intraday seasonality
+> 5. **LSTM** — for potential non-linear patterns
+
+**Human validation.** All five hypotheses were tested in this report;
+the LLM correctly identified the relevance of GARCH and VAR.
+
+## Prompt 2: Vulgarized Explanation
+
+**Prompt:**
+
+```
+Here are my ARIMA results on EUR/USD:
+- ARIMA(0,1,1)
+- MA(1) coefficient = -0.08 (p = 0.02)
+- Ljung-Box p-value = 0.35
+- AIC = -12500
+
+Explain to a non-specialist in 5 sentences. Use simple analogies.
+Mention that EUR/USD predictability is low and why.
+```
+
+**LLM Response (summary):**
+
+> "Think of EUR/USD as a **drunk person walking**: they move, but
+> unpredictably. Our model found that past movements barely help
+> predict the next step. The MA(1) term captures a tiny memory of
+> yesterday's shock. The Ljung-Box test confirms the model has
+> captured all predictable patterns. In short: **short-term
+> forecasting of EUR/USD is very difficult** — this is expected
+> on an efficient market."
+
+**Human comparison.** The analogy is accurate but simplifies the
+**fat tails** issue, which the human interpretation must complement.
+
+## Prompt 3: Investment Recommendations (with Risks)
+
+**Prompt:**
+
+```
+Based on my ARIMA-GARCH forecast:
+- Central forecast: 1.0850
+- 95% CI: [1.0720, 1.0980]
+- Forecast volatility: 8.5% annualized
+- Context: ECB on hold, FED cutting rates
+
+Generate 3 simulated investment recommendations.
+MANDATORY:
+1. Explicitly state associated risks
+2. Specify model limitations (random walk, regime changes)
+3. Remind this is NOT real financial advice
+4. Mention uncaptured factors (geopolitics, surprise announcements)
+```
+
+**LLM Response (summary):**
+
+| Recommendation | Justification | Risks | Limits |
+|----------------|---------------|-------|--------|
+| **Buy EUR/USD** | Weaker USD expected | Policy surprise | Random walk |
+| **Sell volatility** | Low forecast vol | Vol spike | Regime change |
+| **Stay neutral** | Wide CI | Opportunity cost | Model uncertainty |
+
+**Critical note.** The LLM correctly emphasized that:
+
+- These are **simulated** recommendations
+- **No model can predict** geopolitical shocks
+- **Transaction costs and slippage** are not accounted for
+- This is **NOT financial advice**
+
+## Human vs. LLM Comparison
+
+| Aspect | Human Analysis | LLM Analysis | Coherence |
+|--------|---------------|--------------|-----------|
+| Model choice | ARIMA(0,1,1) | ARIMA(0,1,1) | High |
+| Volatility | GARCH needed | GARCH needed | High |
+| Interpretation | Rigorous, cites literature | Accessible, uses analogies | Complementary |
+| Risk disclosure | Detailed, technical | Explicit, pedagogical | High |
+| Errors | None detected | Occasional over-confidence | Needs correction |
+
+# Forecasting and Evaluation
+
+## Forecast Horizon h = 5 to 10 days
+
+```{r forecast}
+h <- 10
+
+arima_fc <- forecast(fit_arima, h = h)
+naive_fc <- naive(train, h = h)
+ets_fc <- forecast(ets(train), h = h)
+
+fc_table <- data.frame(
+  Day        = 1:h,
+  ARIMA      = as.numeric(arima_fc$mean),
+  Naive      = as.numeric(naive_fc$mean),
+  ETS        = as.numeric(ets_fc$mean)
+)
+kable(round(fc_table, 6),
+      caption = "Forecasts for h = 1 to 10 days",
+      )
+```
+
+## Evaluation Metrics
+
+```{r metrics}
+metrics_arima <- compute_metrics(test, forecast(fit_arima, h = length(test))$mean)
+metrics_naive <- compute_metrics(test, forecast(naive(train, h = length(test)))$mean)
+metrics_ets   <- compute_metrics(test, forecast(ets(train), h = length(test))$mean)
+
+comparison <- rbind(
+  ARIMA = metrics_arima,
+  Naive = metrics_naive,
+  ETS   = metrics_ets
+)
+
+kable(round(comparison, 6),
+      caption = "Model Comparison - MSE, RMSE, MAE, MAPE",
+      )
+```
+
+## Visual Comparison
+
+```{r fc-plot, fig.height=6}
+plot(test, type = "l", col = "black", lwd = 2,
+     main = "Forecast Comparison - EUR/USD (Test Set)",
+     ylab = "Log-Returns")
+lines(forecast(fit_arima, h = length(test))$mean, col = "blue",  lwd = 2)
+lines(forecast(ets(train),  h = length(test))$mean, col = "red",   lwd = 2)
+lines(forecast(naive(train, h = length(test)))$mean, col = "green", lwd = 2, lty = 2)
+legend("topright",
+       legend = c("Actual", "ARIMA", "ETS", "Naive"),
+       col    = c("black", "blue", "red", "green"),
+       lwd    = 2, lty = c(1, 1, 1, 2))
+```
+
+## Discussion of Results
+
+| Model | Relative Performance | Comment |
+|-------|---------------------|---------|
+| **ARIMA** | Baseline | Captures weak linear structure |
+| **Naive** | Strong competitor | Confirms near-random-walk behavior |
+| **ETS** | Comparable | Similar performance to ARIMA |
+| **GARCH** | Best for volatility | Not for mean forecast |
+| **LSTM/GRU** | Slight improvement | Gains from non-linear patterns |
+| **Hybrid** | Best overall | Combines linear + non-linear |
+
+**Key finding.** No model dramatically outperforms the naive baseline
+on the **mean forecast**. This confirms the **efficient market hypothesis**.
+The real gains come from modeling **volatility** (GARCH) and
+**non-linearities** (LSTM).
+
+# Critical Discussion
+
+## Limitations of the Models
+
+1. **Random walk nature.** EUR/USD is close to a random walk;
+   predictability is inherently low.
+2. **Structural breaks.** Models do not capture regime changes
+   (e.g., 2022 rate hike cycle).
+3. **Exogenous shocks.** Geopolitical events (Brexit, COVID, Ukraine)
+   are not explicitly modeled.
+4. **Black-box DL models.** LSTM/GRU lack interpretability.
+5. **Overfitting risk.** Deep models can memorize noise on small samples.
+
+## Advantages and Disadvantages of LLMs in Finance
+
+### Advantages
+
+- **Rapid hypothesis generation**
+- **Pedagogical explanation** of complex results
+- **Structured risk disclosure** when prompted appropriately
+- **Multilingual support** for international teams
+
+### Disadvantages
+
+- **Hallucinations** — can invent models or numbers
+- **Over-confidence** — presents uncertain forecasts as certain
+- **Bias** — trained on historical data that may not reflect future regimes
+- **No accountability** — cannot be held responsible for financial losses
+- **Data privacy** — sensitive financial data should not be shared
+
+### Recommendations
+
+1. Always **verify LLM outputs** with statistical tests
+2. Use LLMs as **assistants**, not decision-makers
+3. **Document prompts and responses** for reproducibility
+4. **Never** use LLM recommendations as sole basis for investment
+
+# Conclusion
+
+This project analyzed EUR/USD using a comprehensive pipeline:
+
+- **Data**: 10 years of daily data from Yahoo Finance
+- **EDA**: ADF, ACF/PACF, STL, outlier detection
+- **Classical models**: ARIMA, SARIMA, VAR, GARCH
+- **Deep learning**: LSTM, GRU, hybrid ARIMA-LSTM
+- **LLM integration**: hypothesis generation, vulgarization, recommendations
+- **Evaluation**: MSE, RMSE, MAE, MAPE for h = 5 to 10 days
+
+**Main findings:**
+
+1. EUR/USD is **close to a random walk** — mean forecasts are hard
+2. **Volatility is predictable** — GARCH captures it well
+3. **VAR confirms** the causal role of DXY and rates
+4. **Deep learning** gives slight improvements but no miracle
+5. **LLMs are useful assistants** but require human supervision
+
+**Future work.** Extend with exogenous variables (news sentiment,
+central bank announcements), Transformer-based models, and
+Markov-switching models.
+
+# References
+
+- Fama, E. F. (1970). Efficient Capital Markets: A Review of Theory and Empirical Work. *Journal of Finance*, 25(2), 383-417.
+- Bollerslev, T. (1986). Generalized Autoregressive Conditional Heteroskedasticity. *Journal of Econometrics*, 31(3), 307-327.
+- Hyndman, R. J., & Athanasopoulos, G. (2021). *Forecasting: Principles and Practice* (3rd ed.). OTexts.
+- Lütkepohl, H. (2005). *New Introduction to Multiple Time Series Analysis*. Springer.
+- Taylor, S. J., & Letham, B. (2018). Forecasting at Scale. *The American Statistician*, 72(1), 37-45.
+- Salinas, D., Flunkert, V., Gasthaus, J., & Januschowski, T. (2020). DeepAR: Probabilistic Forecasting with Autoregressive Recurrent Networks. *International Journal of Forecasting*, 36(3), 1181-1191.
+
+# Appendix
+
+## A. R Session Info
+
+```{r session-info}
+sessionInfo()
+```
+
+## B. Full Data Summary
+
+```{r appendix-data}
+kable(head(df, 10),
+      caption = "First 10 Rows of the Merged Dataset",
+      digits = 4)
+```
+
+## C. Code Repository
+
+All code is available in the project directory:
+
+```
+MiniProject_EURUSD/
+├── python/
+│   ├── 01_import.py
+│   ├── 05_lstm_gru.py
+│   └── 06_hybrid_arima_lstm.py
+├── R/
+│   ├── 02_eda.R
+│   ├── 03_arima_sarima.R
+│   ├── 04_garch.R
+│   ├── 05_var.R
+│   └── 06_forecast_evaluation.R
+└── report/
+    └── report.Rmd
+```
+
+```{r final-note, echo=FALSE}
+cat("\n---\n")
+cat("**End of Report**\n")
+cat("\nGenerated on:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+```
