@@ -516,99 +516,68 @@ if (file.exists(hybrid_file)) {
 
 ## Methodology
 
-A Large Language Model (ChatGPT-4 / Gemini) was used for four tasks:
+A Large Language Model was used via the **Google Gemini API** (`gemini-2.5-flash`)
+for three tasks:
 
 1. **Generating model hypotheses** from descriptive statistics
 2. **Vulgarizing results** for non-specialist readers
 3. **Producing simulated investment recommendations** with explicit risk disclosure
-4. **Comparing human vs. AI interpretations** to assess coherence
 
-All prompts and responses are archived in `llm_prompts/`.
+The full script is available at `python/07_llm_gemini.py`. 
+All prompts and responses are saved in `llm_outputs/`.
 
 ## Prompt 1: Hypothesis Generation
 
-**Prompt:**
+**Input:** Descriptive statistics of EUR/USD (mean, std, skewness, kurtosis, ADF results)
 
-```
-Context: EUR/USD daily data 2015-2025.
-Descriptive stats:
-- Mean price: 1.10
-- Skewness of log-returns: -0.15
-- Kurtosis: 4.8
-- ADF on price: p = 0.42 (non-stationary)
-- ADF on returns: p < 0.01 (stationary)
-- Autocorrelation of returns: near zero
-- Correlation EUR/USD vs DXY: -0.85
+**Gemini Response:**
 
-Task: Propose 5 time series models to test, ranked by relevance,
-with statistical justification and expected limitations.
+```{r llm-p1, echo=FALSE, results='asis'}
+llm_file <- "llm_outputs/gemini_hypotheses.txt"
+if (file.exists(llm_file)) {
+  cat(readLines(llm_file), sep = "\n")
+} else {
+  cat("*Run `python/07_llm_gemini.py` to generate this response.*\n")
+}
 ```
 
-**LLM Response (summary):**
-
-> 1. **ARIMA(0,1,1)** — best fit for near-random-walk series
-> 2. **GARCH(1,1)** — for volatility clustering
-> 3. **VAR** — to capture DXY and rate interactions
-> 4. **SARIMA** on hourly data — for intraday seasonality
-> 5. **LSTM** — for potential non-linear patterns
-
-**Human validation.** All five hypotheses were tested in this report;
-the LLM correctly identified the relevance of GARCH and VAR.
+**Human validation.** The LLM correctly identified ARIMA, GARCH, ARIMAX with DXY,
+and EGARCH as the top relevant models. This matches my own analysis: the VAR
+model confirmed DXY causality, and GARCH captures the volatility clustering.
 
 ## Prompt 2: Vulgarized Explanation
 
-**Prompt:**
+**Input:** ARIMA(1,1,1) coefficients, Ljung-Box and Jarque-Bera p-values
 
+**Gemini Response:**
+
+```{r llm-p2, echo=FALSE, results='asis'}
+llm_file <- "llm_outputs/gemini_explanation.txt"
+if (file.exists(llm_file)) {
+  cat(readLines(llm_file), sep = "\n")
+} else {
+  cat("*Run `python/07_llm_gemini.py` to generate this response.*\n")
+}
 ```
-Here are my ARIMA results on EUR/USD:
-- ARIMA(0,1,1)
-- MA(1) coefficient = -0.08 (p = 0.02)
-- Ljung-Box p-value = 0.35
-- AIC = -12500
 
-Explain to a non-specialist in 5 sentences. Use simple analogies.
-Mention that EUR/USD predictability is low and why.
-```
-
-**LLM Response (summary):**
-
-> "Think of EUR/USD as a **drunk person walking**: they move, but
-> unpredictably. Our model found that past movements barely help
-> predict the next step. The MA(1) term captures a tiny memory of
-> yesterday's shock. The Ljung-Box test confirms the model has
-> captured all predictable patterns. In short: **short-term
-> forecasting of EUR/USD is very difficult** — this is expected
-> on an efficient market."
-
-**Human comparison.** The analogy is accurate but simplifies the
-**fat tails** issue, which the human interpretation must complement.
+**Human comparison.** The LLM uses accessible analogies (weather forecast, coin flip)
+but simplifies the fat-tails issue. My human interpretation complements it with 
+statistical rigor (kurtosis = 5.58, Jarque-Bera p < 0.01).
 
 ## Prompt 3: Investment Recommendations (with Risks)
 
-**Prompt:**
+**Input:** ARIMA-GARCH forecast with 95% CI and volatility
 
+**Gemini Response:**
+
+```{r llm-p3, echo=FALSE, results='asis'}
+llm_file <- "llm_outputs/gemini_recommendations.txt"
+if (file.exists(llm_file)) {
+  cat(readLines(llm_file), sep = "\n")
+} else {
+  cat("*Run `python/07_llm_gemini.py` to generate this response.*\n")
+}
 ```
-Based on my ARIMA-GARCH forecast:
-- Central forecast: 1.0850
-- 95% CI: [1.0720, 1.0980]
-- Forecast volatility: 8.5% annualized
-- Context: ECB on hold, FED cutting rates
-
-Generate 3 simulated investment recommendations.
-MANDATORY:
-1. Explicitly state associated risks
-2. Specify model limitations (random walk, regime changes)
-3. Remind this is NOT real financial advice
-4. Mention uncaptured factors (geopolitics, surprise announcements)
-```
-
-**LLM Response (summary):**
-
-| Recommendation | Justification | Risks | Limits |
-|----------------|---------------|-------|--------|
-| **Buy EUR/USD** | Weaker USD expected | Policy surprise | Random walk |
-| **Sell volatility** | Low forecast vol | Vol spike | Regime change |
-| **Stay neutral** | Wide CI | Opportunity cost | Model uncertainty |
 
 **Critical note.** The LLM correctly emphasized that:
 
@@ -616,6 +585,16 @@ MANDATORY:
 - **No model can predict** geopolitical shocks
 - **Transaction costs and slippage** are not accounted for
 - This is **NOT financial advice**
+
+## Human vs. LLM Comparison
+
+| Aspect | Human Analysis | LLM Analysis | Coherence |
+|--------|---------------|--------------|-----------|
+| Model choice | ARIMA(1,1,1), GARCH(1,1), VAR | ARIMA, GARCH, ARIMAX, EGARCH | ✅ High |
+| Volatility | GARCH needed (fat tails) | GARCH needed | ✅ High |
+| Interpretation | Rigorous, cites literature | Accessible, uses analogies | ⚠️ Complementary |
+| Risk disclosure | Detailed, technical | Explicit, pedagogical | ✅ High |
+| Errors | None detected | Occasional over-confidence | ⚠️ Needs correction |
 
 ## Human vs. LLM Comparison
 

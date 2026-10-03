@@ -1,0 +1,21 @@
+Here are 5 time series models for EUR/USD daily data, ranked by relevance, with justifications and limitations:
+
+1.  **ARMA(p,q)-GARCH(1,1) with DXY as an exogenous variable.**
+    *   **Justification:** This comprehensive model directly addresses the non-stationarity of the price series (by modeling stationary returns), the heavy tails and volatility clustering indicated by high kurtosis (5.5845) via GARCH, and incorporates the "strongly negative" correlated DXY to improve mean forecasts. It captures the primary stylized facts simultaneously.
+    *   **Limitations:** More complex to estimate and interpret. Requires DXY data for both fitting and forecasting. The standard GARCH(1,1) assumes symmetric volatility responses to positive and negative shocks.
+
+2.  **EGARCH(1,1) or GJR-GARCH(1,1) (potentially with ARMA(p,q) mean and DXY).**
+    *   **Justification:** Building on GARCH, these models specifically capture asymmetric volatility responses (leverage effect), where negative shocks can increase future volatility more than positive shocks of the same magnitude. This is a common stylized fact for financial returns and refines the modeling of the high kurtosis.
+    *   **Limitations:** Increased complexity compared to standard GARCH. May not yield significant improvements if asymmetry is not pronounced. Parameter interpretation can be more challenging.
+
+3.  **ARIMAX(p,1,q) with DXY as an exogenous variable.**
+    *   **Justification:** The ADF tests confirm the price series is I(1) (non-stationary price, stationary returns), making an ARIMA structure for the differenced series appropriate. The "strongly negative" correlation with DXY makes it a strong candidate for an exogenous regressor, enhancing the accuracy of mean forecasts.
+    *   **Limitations:** Assumes homoskedasticity (constant variance), which is inconsistent with the high kurtosis of returns. This can lead to inefficient parameter estimates and incorrect standard errors. Requires DXY data.
+
+4.  **GARCH(1,1) (with a simple ARMA(p,q) mean for returns).**
+    *   **Justification:** This model is crucial for handling the time-varying volatility and heavy tails explicitly indicated by the high kurtosis (5.5845). It effectively captures volatility clustering, essential for risk management and option pricing.
+    *   **Limitations:** It does not incorporate the valuable exogenous information from DXY. Assumes symmetric volatility responses and focuses primarily on the variance equation.
+
+5.  **ARIMA(p,1,q).**
+    *   **Justification:** This is a fundamental baseline. The ADF tests directly imply the price series is integrated of order one (I(1)), making ARIMA(p,1,q) the minimal appropriate model for capturing the linear dependence structure of the differenced series (returns).
+    *   **Limitations:** Critically fails to account for conditional heteroskedasticity (high kurtosis) and volatility clustering, which are prominent features of financial data. It also ignores the strong predictive power of DXY.
